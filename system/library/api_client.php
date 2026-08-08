@@ -8,13 +8,23 @@
  * (integrations/prestashop/modules/tackquotes/classes/TackApiClient.php):
  * same headers, same auth scheme (Bearer + X-Api-Key), same JSON contract.
  *
- * OpenCart 4.x PSR-4 autoloads `Opencart\System\Library\*` from
- * `system/library/*`, so this class needs no manual require — OpenCart 3.x
- * does not autoload this namespace the same way; see README.md "OpenCart 3.x
- * gaps" for the adaptation that install requires on 3.x.
+ * Autoloading (verified against OpenCart 4.0.2.3 source, not assumed):
+ *   - `catalog/controller/startup/extension.php` registers
+ *     `Opencart\System\Library\Extension\<Code>` => `extension/<code>/system/library/`
+ *     for every installed extension, so the namespace below is the one OpenCart
+ *     actually resolves for an extension-shipped library.
+ *     https://github.com/opencart/opencart/blob/4.0.2.3/upload/catalog/controller/startup/extension.php
+ *   - `system/engine/autoloader.php` maps the remainder of the class name to a
+ *     file with `strtolower(preg_replace('~([a-z])([A-Z]|[0-9])~', '\1_\2', …))`,
+ *     i.e. `ApiClient` => `api_client.php` — NOT `apiclient.php`. This file was
+ *     previously named `apiclient.php`, which that rule can never find.
+ *     https://github.com/opencart/opencart/blob/4.0.2.3/upload/system/engine/autoloader.php
+ *
+ * OpenCart 3.x does not autoload this namespace at all; see README.md
+ * "OpenCart 3.x" for the adaptation an OC3 install requires.
  */
 
-namespace Opencart\System\Library\Tackquote;
+namespace Opencart\System\Library\Extension\Tack;
 
 class ApiClient
 {

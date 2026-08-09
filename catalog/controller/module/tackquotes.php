@@ -14,10 +14,10 @@
  * the WooCommerce plugin — same JSON contract, same TackQuote API endpoints.
  */
 
-namespace Opencart\Catalog\Controller\Extension\Tackquote\Module;
+namespace Opencart\Catalog\Controller\Extension\Tack\Module;
 
 use Opencart\System\Engine\Controller;
-use Opencart\System\Library\Tackquote\ApiClient;
+use Opencart\System\Library\Extension\Tack\ApiClient;
 
 class Tackquotes extends Controller
 {
@@ -45,7 +45,7 @@ class Tackquotes extends Controller
             return '';
         }
 
-        $this->load->language('extension/tackquote/module/tackquotes');
+        $this->load->language('extension/tack/module/tackquotes');
         $this->load->model('catalog/product');
 
         $product = $this->model_catalog_product->getProduct($productId);
@@ -56,22 +56,22 @@ class Tackquotes extends Controller
         $data['tackquote_product_id'] = $productId;
         $data['tackquote_button_label'] = $this->config->get('module_tackquote_button_label')
             ?: $this->language->get('button_default_label');
-        $data['tackquote_ajax_url'] = $this->url->link('extension/tackquote/module/tackquotes.quote', '', true);
+        $data['tackquote_ajax_url'] = $this->url->link('extension/tack/module/tackquotes.quote', '', true);
         $data['text_email'] = $this->language->get('text_email');
         $data['text_quantity'] = $this->language->get('text_quantity');
         $data['text_note'] = $this->language->get('text_note');
         $data['button_send'] = $this->language->get('button_send');
 
-        return $this->load->view('extension/tackquote/module/tackquotes', $data);
+        return $this->load->view('extension/tack/module/tackquotes', $data);
     }
 
     /**
      * AJAX action the storefront modal posts to. Route:
-     * extension/tackquote/module/tackquotes.quote
+     * extension/tack/module/tackquotes.quote
      */
     public function quote(): void
     {
-        $this->load->language('extension/tackquote/module/tackquotes');
+        $this->load->language('extension/tack/module/tackquotes');
 
         $json = [];
 

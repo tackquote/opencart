@@ -2,7 +2,7 @@
 /**
  * TackQuote for OpenCart — admin settings controller.
  *
- * Route: extension/tackquote/module/tackquotes (Extensions > Modules >
+ * Route: extension/tack/module/tackquotes (Extensions > Modules >
  * TackQuote, once installed and enabled from Extensions > Installer /
  * Extensions > Extensions > Modules).
  *
@@ -14,10 +14,10 @@
  * Tack_Settings in the WooCommerce plugin.
  */
 
-namespace Opencart\Admin\Controller\Extension\Tackquote\Module;
+namespace Opencart\Admin\Controller\Extension\Tack\Module;
 
 use Opencart\System\Engine\Controller;
-use Opencart\System\Library\Tackquote\ApiClient;
+use Opencart\System\Library\Extension\Tack\ApiClient;
 
 class Tackquotes extends Controller
 {
@@ -26,7 +26,7 @@ class Tackquotes extends Controller
 
     public function index(): void
     {
-        $this->load->language('extension/tackquote/module/tackquotes');
+        $this->load->language('extension/tack/module/tackquotes');
 
         $this->document->setTitle($this->language->get('heading_title'));
 
@@ -35,21 +35,21 @@ class Tackquotes extends Controller
 
             $this->session->data['success'] = $this->language->get('text_success');
 
-            $this->response->redirect($this->url->link('extension/tackquote/module/tackquotes', 'user_token=' . $this->session->data['user_token'], true));
+            $this->response->redirect($this->url->link('extension/tack/module/tackquotes', 'user_token=' . $this->session->data['user_token'], true));
         }
 
         $data = $this->buildFormData();
 
-        $this->response->setOutput($this->load->view('extension/tackquote/module/tackquotes', $data));
+        $this->response->setOutput($this->load->view('extension/tack/module/tackquotes', $data));
     }
 
     /**
      * AJAX action: "Test connection" button. Route:
-     * extension/tackquote/module/tackquotes.test
+     * extension/tack/module/tackquotes.test
      */
     public function test(): void
     {
-        $this->load->language('extension/tackquote/module/tackquotes');
+        $this->load->language('extension/tack/module/tackquotes');
 
         $json = [];
 
@@ -102,12 +102,12 @@ class Tackquotes extends Controller
             ],
             [
                 'text' => $this->language->get('heading_title'),
-                'href' => $this->url->link('extension/tackquote/module/tackquotes', 'user_token=' . $this->session->data['user_token'], true),
+                'href' => $this->url->link('extension/tack/module/tackquotes', 'user_token=' . $this->session->data['user_token'], true),
             ],
         ];
 
-        $data['action'] = $this->url->link('extension/tackquote/module/tackquotes', 'user_token=' . $this->session->data['user_token'], true);
-        $data['test_action'] = $this->url->link('extension/tackquote/module/tackquotes.test', 'user_token=' . $this->session->data['user_token'], true);
+        $data['action'] = $this->url->link('extension/tack/module/tackquotes', 'user_token=' . $this->session->data['user_token'], true);
+        $data['test_action'] = $this->url->link('extension/tack/module/tackquotes.test', 'user_token=' . $this->session->data['user_token'], true);
         $data['back'] = $this->url->link('marketplace/extension', 'user_token=' . $this->session->data['user_token'] . '&type=module', true);
         $data['user_token'] = $this->session->data['user_token'];
 
@@ -127,6 +127,13 @@ class Tackquotes extends Controller
             'module_tackquote_api_url' => 'https://api.tackquote.com/v1',
             'module_tackquote_api_key' => '',
             'module_tackquote_button_label' => 'Request a Quote',
+            // Bearer token for the INBOUND direction (TackQuote -> this store),
+            // i.e. the catalog/order feed served by
+            // catalog/controller/api/{product,order}.php. It is a different
+            // secret from module_tackquote_api_key, which authenticates this
+            // store when it calls OUT to the TackQuote API. Empty = the feed is
+            // switched off entirely (see Api\Product::list()).
+            'module_tackquote_connector_token' => '',
         ];
 
         foreach ($fields as $key => $default) {
@@ -143,11 +150,15 @@ class Tackquotes extends Controller
         // show a masked placeholder instead, same convention as the
         // PrestaShop module's maskedApiKey().
         $storedKey = (string) $this->config->get('module_tackquote_api_key');
-        $data['module_tackquote_api_key_masked'] = $storedKey !== ''
-            ? str_repeat('•', 8) . substr($storedKey, -4)
-            : '';
+        $data['module_tackquote_api_key_masked'] = self::mask($storedKey);
+
+        $storedToken = (string) $this->config->get('module_tackquote_connector_token');
+        $data['module_tackquote_connector_token_masked'] = self::mask($storedToken);
+        $data['module_tackquote_connector_url'] = HTTP_CATALOG . 'index.php?route=extension/tack/api/product.list';
+
         if (($this->request->server['REQUEST_METHOD'] ?? '') !== 'POST') {
             $data['module_tackquote_api_key'] = '';
+            $data['module_tackquote_connector_token'] = '';
         }
 
         $data['header'] = $this->load->controller('common/header');
@@ -159,7 +170,7 @@ class Tackquotes extends Controller
 
     private function validate(): bool
     {
-        if (!$this->user->hasPermission('modify', 'extension/tackquote/module/tackquotes')) {
+        if (!$this->user->hasPermission('modify', 'extension/tack/module/tackquotes')) {
             $this->error['warning'] = $this->language->get('error_permission');
         }
 
@@ -180,18 +191,44 @@ class Tackquotes extends Controller
     {
         $this->load->model('setting/setting');
 
-        $previousKey = (string) $this->config->get('module_tackquote_api_key');
-        $submittedKey = trim((string) ($this->request->post['module_tackquote_api_key'] ?? ''));
-        $maskedKey = $previousKey !== '' ? str_repeat('•', 8) . substr($previousKey, -4) : '';
-
-        $apiKey = ($submittedKey === '' || $submittedKey === $maskedKey) ? $previousKey : $submittedKey;
+        $apiKey = $this->keepOrReplace('module_tackquote_api_key');
+        $connectorToken = $this->keepOrReplace('module_tackquote_connector_token');
 
         $this->model_setting_setting->editSetting('module_tackquote', [
             'module_tackquote_status' => (int) ($this->request->post['module_tackquote_status'] ?? 0),
             'module_tackquote_api_url' => rtrim((string) ($this->request->post['module_tackquote_api_url'] ?? ''), '/'),
             'module_tackquote_api_key' => $apiKey,
             'module_tackquote_button_label' => (string) ($this->request->post['module_tackquote_button_label'] ?? 'Request a Quote'),
+            'module_tackquote_connector_token' => $connectorToken,
         ]);
+    }
+
+    /**
+     * Secret fields are rendered masked, so an unchanged (or empty) submission
+     * must keep the stored value rather than blanking it. Submitting the
+     * literal string `-` clears the secret, which is the only way to switch the
+     * inbound feed back off once a token has been set.
+     */
+    private function keepOrReplace(string $key): string
+    {
+        $previous = (string) $this->config->get($key);
+        $submitted = trim((string) ($this->request->post[$key] ?? ''));
+
+        if ($submitted === '-') {
+            return '';
+        }
+
+        if ($submitted === '' || $submitted === self::mask($previous)) {
+            return $previous;
+        }
+
+        return $submitted;
+    }
+
+    /** Never echo a stored secret back into HTML; show only its last 4 chars. */
+    private static function mask(string $secret): string
+    {
+        return $secret !== '' ? str_repeat('•', 8) . substr($secret, -4) : '';
     }
 
     // NOTE: `$this->model_setting_setting` above is not a declared property —

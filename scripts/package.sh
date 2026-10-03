@@ -4,7 +4,7 @@
 # installer) and dist/tack-opencart-source.zip (source archive only).
 #
 # Split out of the hub repository's scripts/package-all.sh
-# (https://github.com/ackm04/tack-ecommerce-extensions) when this extension moved
+# (https://github.com/tackquote/tack-ecommerce-extensions) when this extension moved
 # to its own repository.
 #
 # The developer guide is explicit: "you must not zip the folder `Test module/`

@@ -14,9 +14,9 @@ store talk to TackQuote; the feed token lets TackQuote talk to this store.
 Neither is usable in the other direction.
 
 Distribution authority: merchants install the public
-[`tack.ocmod.zip`](https://github.com/__REPO_SLUG__/releases/latest/download/tack.ocmod.zip)
+[`tack.ocmod.zip`](https://github.com/tackquote/opencart/releases/latest/download/tack.ocmod.zip)
 release asset directly. Keep that exact filename. The optional
-[`tack-opencart-source.zip`](https://github.com/__REPO_SLUG__/releases/latest/download/tack-opencart-source.zip)
+[`tack-opencart-source.zip`](https://github.com/tackquote/opencart/releases/latest/download/tack-opencart-source.zip)
 asset is source-only for review and local builds; do not upload it to OpenCart.
 
 Both links resolve to the newest GitHub release rather than a pinned tag, so they never

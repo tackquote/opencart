@@ -2,7 +2,7 @@
 /**
  * TackQuote for OpenCart — save-path regression suite.
  *
- *   php opencart/tests/run.php
+ *   php tests/run.php
  *
  * No composer, no phpunit, no database, no store. The extension ships no
  * dependency manifest and OpenCart itself is not a composer package, so a
@@ -1607,14 +1607,15 @@ check('the namespace-derived extension code still matches tack.ocmod.zip', funct
 // Added when this extension was reconciled against the TackQuote monorepo copy before
 // that copy was retired. The drift these catch is NOT a code defect and no PHP test
 // would have seen it: README.md told merchants to download `tack-opencart.zip` from
-// release `v1.1.0` and build the installer themselves, while scripts/package-all.sh had
-// been emitting a ready-to-install `tack.ocmod.zip` since `v1.2.0`. A merchant
+// release `v1.1.0` and build the installer themselves, while the packager (then the hub
+// repo's scripts/package-all.sh, now scripts/package.sh) had been emitting a
+// ready-to-install `tack.ocmod.zip` since `v1.2.0`. A merchant
 // following the README got a source archive, uploaded it, and OpenCart derived the
 // extension code from that filename — installs cleanly, then 404s every route.
 //
-// These read README.md only. tests/run.php is run with the extension directory as the
-// mount root (`docker run -v "$PWD/opencart":/p`), so nothing outside it is readable
-// here and scripts/package-all.sh cannot be cross-checked from this suite.
+// These read README.md only. The packager's output is not cross-checked from here (the
+// suite also ships inside tack-opencart-source.zip, which carries no scripts/); CI
+// builds the zips with scripts/package.sh in the same job.
 
 echo "\nTackQuote for OpenCart — the documented contract\n";
 
@@ -1629,6 +1630,11 @@ check('README names the installable asset the packager actually emits', function
     assertTrue(
         strpos($readme, 'releases/latest/download/tack-opencart-source.zip') !== false,
         'README must link the source archive under its real name, tack-opencart-source.zip'
+    );
+
+    assertTrue(
+        strpos($readme, 'bash scripts/package.sh') !== false,
+        'README must document scripts/package.sh as the command that builds both assets'
     );
 
     // `tack-opencart.zip` (no `-source`) is the pre-v1.2.0 name. It is no longer built
@@ -1653,9 +1659,11 @@ check('README does not document build or test paths from the retired monorepo', 
     // Each of these resolves inside the monorepo and nowhere in this repository, so a
     // reader who runs them gets "No such file or directory" and no hint of the real path.
     $strays = [
-        'bash scripts/package-integrations.sh' => 'the build command; this repo builds with scripts/package-all.sh',
-        'dist/extensions/'                     => 'the output directory; scripts/package-all.sh writes to dist/',
-        'php integrations/opencart/'           => 'the test command; this suite lives at opencart/tests/run.php',
+        'bash scripts/package-integrations.sh' => 'the build command; this repo builds with scripts/package.sh',
+        'scripts/package-all.sh'               => 'the hub repo\'s packager; this repo builds with scripts/package.sh',
+        'dist/extensions/'                     => 'the output directory; scripts/package.sh writes to dist/',
+        'php integrations/opencart/'           => 'the test command; this suite lives at tests/run.php',
+        'php opencart/tests/run.php'           => 'the hub repo\'s test path; this suite lives at tests/run.php',
     ];
 
     foreach ($strays as $stray => $why) {
@@ -1669,13 +1677,13 @@ check('README does not document build or test paths from the retired monorepo', 
 check('the documented test command matches where this suite actually lives', function () use ($root) {
     $readme = (string) file_get_contents($root . '/README.md');
 
-    // Deliberately NOT derived from basename($root): the documented docker invocation
-    // mounts the extension directory as the container root, so $root is `/p` there and a
-    // basename check would assert the mount point instead of the repository layout.
-    // `opencart/tests/run.php` is the path from the repository root, which is the path a
-    // reader actually types.
+    // Deliberately NOT derived from basename($root): a docker invocation may mount the
+    // extension directory as the container root, so $root can be `/p` and a basename
+    // check would assert the mount point instead of the repository layout.
+    // `tests/run.php` is the path from the repository root, which is the path a reader
+    // actually types.
     assertTrue(
-        strpos($readme, 'php opencart/tests/run.php') !== false,
+        strpos($readme, 'php tests/run.php') !== false,
         'README must document the runner at the path it can actually be invoked from'
     );
 

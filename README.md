@@ -1,5 +1,7 @@
 # TackQuote for OpenCart
 
+> Part of the TackQuote integrations family. All platforms are indexed in the hub repository: [ackm04/tack-ecommerce-extensions](https://github.com/ackm04/tack-ecommerce-extensions) (TackQuote integrations index).
+
 An OpenCart 4.x extension with **two independent halves**:
 
 | Half | Direction | What it is |
@@ -12,15 +14,14 @@ store talk to TackQuote; the feed token lets TackQuote talk to this store.
 Neither is usable in the other direction.
 
 Distribution authority: merchants install the public
-[`tack.ocmod.zip`](https://github.com/ackm04/tack-ecommerce-extensions/releases/latest/download/tack.ocmod.zip)
+[`tack.ocmod.zip`](https://github.com/__REPO_SLUG__/releases/latest/download/tack.ocmod.zip)
 release asset directly. Keep that exact filename. The optional
-[`tack-opencart-source.zip`](https://github.com/ackm04/tack-ecommerce-extensions/releases/latest/download/tack-opencart-source.zip)
+[`tack-opencart-source.zip`](https://github.com/__REPO_SLUG__/releases/latest/download/tack-opencart-source.zip)
 asset is source-only for review and local builds; do not upload it to OpenCart.
 
-Both links resolve to the newest GitHub release rather than a pinned tag: this repository
-cuts one repo-wide `v*` tag covering every platform, so a tag pinned in this file goes
-stale the next time any *other* extension ships. `scripts/package-all.sh` is what emits
-both assets, under exactly these names.
+Both links resolve to the newest GitHub release rather than a pinned tag, so they never
+go stale when the next version ships. `scripts/package.sh` is what emits both assets, under
+exactly these names.
 
 > ## ⚠️ The package MUST be named `tack.ocmod.zip`
 >
@@ -41,7 +42,7 @@ both assets, under exactly these names.
 > controller's own namespace and fails if it no longer matches the shipped
 > `tack.ocmod.zip`, so this cannot drift silently. (The monorepo guarded the same
 > invariant from `scripts/package-integrations.sh`; that script is not part of this
-> repository — `scripts/package-all.sh` builds the artifacts here.)
+> repository — `scripts/package.sh` builds the artifacts here.)
 
 > **New in 1.3.1 — documentation only, no code change.** Reconciled against the
 > TackQuote monorepo copy of this extension before that copy was retired. The
@@ -99,7 +100,7 @@ both assets, under exactly these names.
 ## Layout
 
 ```
-opencart/
+./                                                (repository root)
 ├── install.json
 ├── README.md
 ├── admin/
@@ -324,7 +325,7 @@ sold on: nothing new can enter the cart.
 ## Build
 
 ```
-bash scripts/package-all.sh
+bash scripts/package.sh
 ```
 
 produces two artifacts in `dist/` (pass a directory to override):
@@ -337,14 +338,14 @@ produces two artifacts in `dist/` (pass a directory to override):
 To build just the installable one by hand:
 
 ```
-cd opencart
-zip -r ../dist/tack.ocmod.zip install.json admin catalog system
+mkdir -p dist
+zip -r dist/tack.ocmod.zip install.json admin catalog system
 ```
 
 ## Tests
 
 ```
-php opencart/tests/run.php
+php tests/run.php
 ```
 
 No composer, no phpunit, no database, no store — OpenCart is not a composer

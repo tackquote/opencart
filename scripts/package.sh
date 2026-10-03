@@ -38,19 +38,29 @@ trap 'rm -rf "$STAGE"' EXIT
 # paths as it stores them, so they are relative to the staged tree.
 COMMON_EX=( -x '*/.git/*' -x '*/.gitignore' -x '*/.DS_Store' -x '*/__MACOSX/*' -x '*/._*' )
 
-say() { printf '  %s
-' "$*"; }
+say() { printf '  %s\n' "$*"; }
 
-# stage_repo <dest> -- copy this repository's working tree to $STAGE/<dest>,
+# export_head <dir> -- extract this repository's committed tree (HEAD) into
+# <dir>. Every artifact is staged from git, never from the working tree, so
+# local litter (node_modules/, composer.lock, .php-cs-fixer.cache, a non-dist
+# outdir from an earlier run, ...) can never reach a zip: only tracked files
+# exist to be packed. Uncommitted edits are not packed either -- commit first.
+export_head() {
+  mkdir -p "$1"
+  git -C "$ROOT" archive --format=tar HEAD | tar -x -C "$1"
+}
+
+# stage_repo <dest> -- export this repository's committed tree to $STAGE/<dest>,
 # minus the repository scaffolding that was never part of the extension when it
-# lived in the hub monorepo (git metadata, build output, this script, the CI
-# workflows, the repo-level LICENSE and .gitignore). Keeps the
-# artifact to the same file set the monorepo's package-all.sh shipped.
+# lived in the hub monorepo (this script, the CI workflows, the repo-level
+# LICENSE and .gitignore). Keeps the artifact to the same file set the
+# monorepo's package-all.sh shipped. git metadata, build output and vendor/ are
+# untracked, so the export never contains them.
 stage_repo() {
   local d="$STAGE/$1"
-  rm -rf "$d"; mkdir -p "$(dirname "$d")"
-  cp -R "$ROOT" "$d"
-  rm -rf "$d/.git" "$d/dist" "$d/scripts" "$d/.github/workflows" "$d/LICENSE" "$d/.gitignore" "$d/vendor"
+  rm -rf "$d"
+  export_head "$d"
+  rm -rf "$d/scripts" "$d/.github/workflows" "$d/LICENSE" "$d/.gitignore"
   rmdir "$d/.github" 2>/dev/null || true
   find "$d" -name '.DS_Store' -delete 2>/dev/null || true
 }
@@ -63,7 +73,8 @@ pack() { # pack <zipname> <top-level-dir> [extra zip -x args...]
 
 say "opencart"
 rm -rf "$STAGE/oc" && mkdir -p "$STAGE/oc"
-for p in admin catalog system install.json; do cp -R "$ROOT/$p" "$STAGE/oc/"; done
+export_head "$STAGE/src"
+for p in admin catalog system install.json; do cp -R "$STAGE/src/$p" "$STAGE/oc/"; done
 find "$STAGE/oc" -name '.DS_Store' -delete 2>/dev/null || true
 ( cd "$STAGE/oc" && zip -q -r -X "$OUT/tack.ocmod.zip" . -x '.DS_Store' -x '__MACOSX/*' )
 say "tack.ocmod.zip  $(wc -c < "$OUT/tack.ocmod.zip" | tr -d ' ') bytes"

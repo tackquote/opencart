@@ -44,6 +44,19 @@ exactly these names.
 > invariant from `scripts/package-integrations.sh`; that script is not part of this
 > repository — `scripts/package.sh` builds the artifacts here.)
 
+> **New in 1.3.2 — Test connection no longer reports a wrong API key as connected.**
+> The button calls `GET /integrations/opencart/ping`, which TackQuote authenticates
+> with the API key. It used to fall back to `GET /health` when the ping failed for any
+> reason, and `/health` answers 200 without a key, so a wrong or revoked key read
+> "Connected". Now a 401 (TackQuote's answer to a wrong, revoked or expired key) says
+> *TackQuote rejected this API key*. A 403 comes with a valid key (for example the
+> plan's monthly API-call limit) and shows TackQuote's own message. `/health` is tried
+> only when the ping got no answer, a 404 (an older TackQuote API) or a 5xx; if it then
+> answers, the result is a warning that the API is reachable but the key could not be
+> checked, never "Connected". A 2xx counts as connected only when it is the ping's own
+> `{"ok": true}`, so a wrong API URL serving a web page is an error. A lapsed TackQuote
+> account still answers that, so it reads connected.
+
 > **New in 1.3.1 — documentation only, no code change.** Reconciled against the
 > TackQuote monorepo copy of this extension before that copy was retired. The
 > distribution contract above was stale: it named `tack-opencart.zip` at `v1.1.0` and

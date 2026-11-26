@@ -197,18 +197,37 @@ class Tackquotes extends Controller
         if ($apiKey === '') {
             $json['error'] = $this->language->get('error_api_key');
         } else {
-            $client = new ApiClient($apiUrl, $apiKey);
-            $result = $client->testConnection();
+            // A rejected key and an unchecked key each get their own wording: the old
+            // check fell back to /health on any failure, and /health answers 200 with no
+            // key, so a wrong or revoked key used to read "Connected".
+            $check = $this->connectionClient($apiUrl, $apiKey)->checkConnection();
 
-            if ($result === true) {
-                $json['success'] = $this->language->get('text_test_success');
-            } else {
-                $json['error'] = sprintf($this->language->get('error_test_connection'), (string) $result);
+            switch ($check['result']) {
+                case ApiClient::CONNECTION_OK:
+                    $json['success'] = $this->language->get('text_test_success');
+                    break;
+                case ApiClient::CONNECTION_KEY_REJECTED:
+                    $json['error'] = $this->language->get('error_test_key_rejected');
+                    break;
+                case ApiClient::CONNECTION_KEY_UNCHECKED:
+                    $json['warning'] = $this->language->get('text_test_key_unchecked');
+                    break;
+                default:
+                    $json['error'] = sprintf($this->language->get('error_test_connection'), $check['message']);
             }
         }
 
         $this->response->addHeader('Content-Type: application/json');
         $this->response->setOutput((string) json_encode($json));
+    }
+
+    /**
+     * The client test() uses. A seam so the status-to-message mapping can be tested
+     * without a network.
+     */
+    protected function connectionClient(string $apiUrl, string $apiKey): ApiClient
+    {
+        return new ApiClient($apiUrl, $apiKey);
     }
 
     /**

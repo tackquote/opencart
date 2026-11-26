@@ -228,6 +228,8 @@
       .then(function (json) {
         if (json.error) {
           showResult('danger', json.error);
+        } else if (json.warning) {
+          showResult('warning', json.warning);
         } else if (json.success) {
           showResult('success', json.success);
         }

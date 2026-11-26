@@ -51,6 +51,7 @@ require $root . '/catalog/controller/event/quote.php';
 use Opencart\Admin\Controller\Extension\Tack\Module\Tackquotes;
 use Opencart\Catalog\Controller\Extension\Tack\Module\Tackquotes as CatalogTackquotes;
 use Opencart\System\Engine\Registry;
+use Opencart\System\Library\Extension\Tack\ApiClient as TackApiClient;
 use Opencart\Catalog\Controller\Extension\Tack\Api\Product;
 use Tack\Test\Config;
 use Tack\Test\Db;
@@ -111,7 +112,7 @@ function assertSame($expected, $actual, string $message): void
  * @param array<string, mixed>  $config
  * @return array{0: Tackquotes, 1: Response, 2: SettingModel}
  */
-function makeController(array $granted, array $post = [], array $config = []): array
+function makeController(array $granted, array $post = [], array $config = [], string $class = Tackquotes::class): array
 {
     $registry = new Registry();
 
@@ -134,7 +135,7 @@ function makeController(array $granted, array $post = [], array $config = []): a
     $registry->set('model_setting_setting', $setting);
     $registry->set('load', new Loader($registry, dirname(__DIR__) . '/admin/language/en-gb/module/tackquotes.php'));
 
-    return [new Tackquotes($registry), $response, $setting];
+    return [new $class($registry), $response, $setting];
 }
 
 /** Decode a controller response, insisting it really is JSON. */
@@ -322,6 +323,153 @@ check('test() still reports a missing API key for an authorised user', function 
     assertTrue(isset($json['error']), 'with no key configured, test() should report the missing key');
     assertTrue(strpos($json['error'], 'permission') === false,
         'an authorised user must not be told this is a permission problem');
+});
+
+// ------------------------------------------------- test(): what each ping status means
+
+echo "\nTackQuote for OpenCart — Test connection: ping status -> verdict\n";
+
+/**
+ * The ApiClient with only its HTTP exchange scripted, per path. Everything that decides
+ * what a status MEANS (checkConnection) is the real code.
+ */
+class ScriptedApiClient extends \Opencart\System\Library\Extension\Tack\ApiClient
+{
+    /** @var array<string, array{status: int, data: array, error: ?string}> */
+    public array $answers = [];
+
+    /** @var array<int, string> */
+    public array $paths = [];
+
+    protected function exchange(string $method, string $path, ?array $body = null): array
+    {
+        $this->paths[] = $method . ' ' . $path;
+
+        return $this->answers[$path];
+    }
+}
+
+function scripted(int $pingStatus, int $healthStatus = 200): ScriptedApiClient
+{
+    $answer = function (int $status): array {
+        if ($status >= 200 && $status < 300) {
+            return ['status' => $status, 'data' => ['ok' => true], 'error' => null];
+        }
+
+        return [
+            'status' => $status,
+            'data' => [],
+            'error' => $status === 0 ? 'Connection error: timed out' : 'HTTP ' . $status . ' from TackQuote',
+        ];
+    };
+    $client = new ScriptedApiClient('https://api.tackquote.com/v1', 'sk_test');
+    $client->answers = [
+        '/integrations/opencart/ping' => $answer($pingStatus),
+        '/health' => $answer($healthStatus),
+    ];
+
+    return $client;
+}
+
+check('ping 200 -> connected, and /health is never asked', function () {
+    $client = scripted(200);
+    assertSame(TackApiClient::CONNECTION_OK, $client->checkConnection()['result'], 'a 2xx ping is a valid key');
+    assertSame(['GET /integrations/opencart/ping'], $client->paths, 'a successful ping needs no fallback');
+});
+
+foreach ([401, 403] as $status) {
+    check("ping $status -> key rejected, with NO /health fallback (health would say 200)", function () use ($status) {
+        $client = scripted($status, 200);
+        assertSame(TackApiClient::CONNECTION_KEY_REJECTED, $client->checkConnection()['result'],
+            "a $status is TackQuote refusing the key; it must never read as connected");
+        assertSame(['GET /integrations/opencart/ping'], $client->paths, "a $status must not fall back to /health");
+        assertTrue(strpos((string) $client->testConnection(), 'rejected this API key') !== false,
+            'the legacy testConnection() must report the rejected key too');
+    });
+}
+
+foreach ([0 => 'a network error', 404 => 'a 404 (older API)', 500 => 'a 500', 503 => 'a 503'] as $status => $label) {
+    check("ping $label + /health 200 -> reachable, key NOT checked (never connected)", function () use ($status) {
+        $client = scripted($status, 200);
+        $check = $client->checkConnection();
+        assertSame(TackApiClient::CONNECTION_KEY_UNCHECKED, $check['result'], 'the key was never checked');
+        assertSame(['GET /integrations/opencart/ping', 'GET /health'], $client->paths, 'fallback expected');
+        assertTrue($client->testConnection() !== true, 'an unchecked key must not be reported as connected');
+    });
+
+    check("ping $label + /health failing -> failed, with the ping's own error", function () use ($status) {
+        $check = scripted($status, 0)->checkConnection();
+        assertSame(TackApiClient::CONNECTION_FAILED, $check['result'], 'nothing answered');
+        assertTrue($check['message'] !== '', 'the merchant needs the reason');
+    });
+}
+
+check('ping 429 -> failed with TackQuote\'s message, no fallback to /health', function () {
+    $client = scripted(429, 200);
+    assertSame(TackApiClient::CONNECTION_FAILED, $client->checkConnection()['result'], '429 is not "connected"');
+    assertSame(['GET /integrations/opencart/ping'], $client->paths, 'only network/404/5xx fall back');
+});
+
+check('a refused connection through the REAL exchange is status 0 and falls back', function () {
+    if (!function_exists('curl_init')) {
+        throw new RuntimeException('curl extension missing');
+    }
+    // 127.0.0.1:9 (discard) refuses at once; both calls fail, so the verdict is FAILED.
+    $check = (new TackApiClient('http://127.0.0.1:9', 'sk_test'))->checkConnection();
+    assertSame(TackApiClient::CONNECTION_FAILED, $check['result'], 'nothing is listening');
+    assertTrue(strpos($check['message'], 'Connection error') === 0, 'got: ' . $check['message']);
+});
+
+/** The admin controller with its client replaced by a scripted one. */
+class ProbeAdmin extends Tackquotes
+{
+    public static ?ScriptedApiClient $client = null;
+
+    protected function connectionClient(string $apiUrl, string $apiKey): TackApiClient
+    {
+        return self::$client;
+    }
+}
+
+function adminTest(int $pingStatus, int $healthStatus = 200): array
+{
+    ProbeAdmin::$client = scripted($pingStatus, $healthStatus);
+    [$controller, $response] = makeController(['modify:' . ROUTE], [], [
+        'module_tackquotes_api_url' => 'https://api.tackquote.com/v1',
+        'module_tackquotes_api_key' => 'sk_test',
+    ], ProbeAdmin::class);
+    $controller->test();
+
+    return decodeJson($response);
+}
+
+check('admin: ping 200 -> success', function () {
+    $json = adminTest(200);
+    assertTrue(isset($json['success']) && !isset($json['error']) && !isset($json['warning']), json_encode($json));
+});
+
+check('admin: ping 401 -> the rejected-key error, not "Connected"', function () {
+    $json = adminTest(401);
+    assertTrue(!isset($json['success']), 'a rejected key reported success');
+    assertTrue(strpos((string) ($json['error'] ?? ''), 'rejected this API key') !== false, json_encode($json));
+});
+
+check('admin: ping 403 -> the rejected-key error', function () {
+    $json = adminTest(403);
+    assertTrue(!isset($json['success']) && strpos((string) ($json['error'] ?? ''), 'rejected') !== false, json_encode($json));
+});
+
+check('admin: ping 500 + /health 200 -> a warning that never says connected', function () {
+    $json = adminTest(500);
+    assertTrue(!isset($json['success']) && !isset($json['error']), json_encode($json));
+    assertTrue(strpos((string) $json['warning'], 'could not be checked') !== false, json_encode($json));
+    assertTrue(stripos((string) $json['warning'], 'connected') === false, 'must not say connected');
+});
+
+check('the admin template renders a warning result', function () use ($root) {
+    $twig = (string) file_get_contents($root . '/admin/view/template/module/tackquotes.twig');
+    assertTrue(strpos($twig, "showResult('warning', json.warning)") !== false,
+        'test() can answer {warning}; the button handler must show it');
 });
 
 // ---------------------------------------------------------------------- index()
@@ -624,7 +772,8 @@ check('every language key the admin controller and template ask for exists', fun
     $lang->load($root . '/admin/language/en-gb/module/tackquotes.php');
 
     foreach (['error_permission', 'error_api_url', 'error_api_key', 'error_test_connection',
-              'error_ajax', 'text_success', 'text_test_success', 'heading_title'] as $key) {
+              'error_ajax', 'text_success', 'text_test_success', 'heading_title',
+              'error_test_key_rejected', 'text_test_key_unchecked'] as $key) {
         assertTrue($lang->has($key), "language key '$key' is missing, so the UI would show the key itself");
     }
 });

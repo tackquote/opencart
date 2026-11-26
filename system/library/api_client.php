@@ -71,14 +71,14 @@ class ApiClient
     }
 
     /**
-     * One HTTP exchange, keeping the status code that request() folds into a string.
+     * The raw cURL call and nothing else: the one seam the tests replace, so every
+     * byte after it (JSON decoding, status handling) is the shipped code.
      *
-     * `status` is 0 when no HTTP answer arrived at all (DNS, refused, TLS, timeout).
-     * `error` is null exactly when the status is 2xx.
+     * `error` is set when no HTTP answer arrived at all (DNS, refused, TLS, timeout).
      *
-     * @return array{status: int, data: array, error: ?string}
+     * @return array{error: string|null, status: int, body: string}
      */
-    protected function exchange(string $method, string $path, ?array $body = null): array
+    protected function transport(string $method, string $path, ?array $body = null): array
     {
         $url = $this->baseUrl . $path;
 
@@ -108,10 +108,29 @@ class ApiClient
         curl_close($ch);
 
         if ($errno) {
-            return ['status' => 0, 'data' => [], 'error' => sprintf('Connection error: %s', $error)];
+            return ['error' => sprintf('Connection error: %s', $error), 'status' => 0, 'body' => ''];
         }
 
-        $data = json_decode((string) $response, true);
+        return ['error' => null, 'status' => $httpCode, 'body' => (string) $response];
+    }
+
+    /**
+     * One HTTP exchange, keeping the status code that request() folds into a string.
+     *
+     * `status` is 0 when no HTTP answer arrived at all (DNS, refused, TLS, timeout).
+     * `error` is null exactly when the status is 2xx.
+     *
+     * @return array{status: int, data: array, error: string|null}
+     */
+    protected function exchange(string $method, string $path, ?array $body = null): array
+    {
+        $raw = $this->transport($method, $path, $body);
+        if ($raw['error'] !== null) {
+            return ['status' => 0, 'data' => [], 'error' => $raw['error']];
+        }
+
+        $httpCode = $raw['status'];
+        $data = json_decode($raw['body'], true);
 
         if ($httpCode < 200 || $httpCode >= 300) {
             $message = is_array($data) && isset($data['message'])
@@ -128,17 +147,20 @@ class ApiClient
      * Connectivity + API-key check for the admin "Test connection" button.
      *
      * Calls `GET /integrations/opencart/ping`, which TackQuote authenticates with the
-     * store's API key. Any 2xx is CONNECTION_OK: a lapsed TackQuote account still
+     * store's API key. A 2xx carrying `"ok": true` is CONNECTION_OK: a lapsed TackQuote account still
      * answers 200 (with a reduced `capabilities` list), and its key is valid.
      *
-     * 401/403 mean TackQuote rejected the key: CONNECTION_KEY_REJECTED, no fallback.
+     * A 2xx counts only when the body is the ping's own `{"ok": true}`.
+     * 401 means TackQuote rejected the key: CONNECTION_KEY_REJECTED, no fallback. A 403
+     * comes with a valid key (a plan limit, an unresolved account): CONNECTION_FAILED
+     * with TackQuote's message, no fallback.
      * This used to fall back to `GET /health` on ANY ping failure, and /health answers
      * 200 without a key, so a wrong or revoked key reported "Connected".
      *
      * `/health` is tried only when the ping failure says nothing about the key: no HTTP
      * answer (network error, timeout), 404 (a TackQuote API older than the route) or
      * 5xx. If /health then answers 2xx the result is CONNECTION_KEY_UNCHECKED, never OK.
-     * Every other status (400, 429, ...) is CONNECTION_FAILED with TackQuote's message.
+     * Every other status (400, 403, 429, ...) is CONNECTION_FAILED with TackQuote's message.
      *
      * @return array{result: string, message: string} `message` is the ping's own error
      *                                                text ('' on success).
@@ -153,10 +175,24 @@ class ApiClient
         $status = $ping['status'];
 
         if ($ping['error'] === null) {
-            return ['result' => self::CONNECTION_OK, 'message' => ''];
+            // The ping answers {"ok": true, "tenantId": ..., "capabilities": [...]}
+            // (opencart-plugin.controller.ts). A 2xx without it is not TackQuote's
+            // ping: a wrong API URL serving a web page must not read as connected.
+            if (isset($ping['data']['ok']) && $ping['data']['ok'] === true) {
+                return ['result' => self::CONNECTION_OK, 'message' => ''];
+            }
+
+            return [
+                'result' => self::CONNECTION_FAILED,
+                'message' => 'The TackQuote API URL answered, but not as the TackQuote API. Check the URL (default https://api.tackquote.com/v1).',
+            ];
         }
 
-        if ($status === 401 || $status === 403) {
+        // A wrong, revoked or expired key is ALWAYS 401 `code: api_key_invalid`
+        // (ApiKeyGuard). A 403 comes with a VALID key: a plan limit (PLAN_LIMIT_EXCEEDED,
+        // API calls per month) or an account TackQuote cannot resolve. It falls through
+        // to CONNECTION_FAILED with TackQuote's own message, and never to /health.
+        if ($status === 401) {
             return ['result' => self::CONNECTION_KEY_REJECTED, 'message' => (string) $ping['error']];
         }
 

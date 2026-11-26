@@ -51,9 +51,14 @@ exactly these names.
 > "Connected". Now a 401 (TackQuote's answer to a wrong, revoked or expired key) says
 > *TackQuote rejected this API key*. A 403 comes with a valid key (for example the
 > plan's monthly API-call limit) and shows TackQuote's own message. `/health` is tried
-> only when the ping got no answer, a 404 (an older TackQuote API) or a 5xx; if it then
-> answers, the result is a warning that the API is reachable but the key could not be
-> checked, never "Connected". A 2xx counts as connected only when it is the ping's own
+> only when the ping got no answer, a 404 or a 5xx, and it counts only when the body is
+> TackQuote's own health answer (`"status": "ok"`, `"database": "connected"`, a numeric
+> `uptime`), never a web page or another service's `{"status":"ok"}`. After no answer or
+> a 5xx the result is a warning that the API is reachable but the key could not be
+> checked, never "Connected". After a 404 the API URL setting is almost always wrong
+> (usually missing `/v1`): when TackQuote's `/health` answers at that host the button
+> says *TackQuote answered, but not at the API address: check the TackQuote API URL
+> setting (it should end in /v1)* instead of asking you to try again. A 2xx counts as connected only when it is the ping's own
 > `{"ok": true}`, so a wrong API URL serving a web page is an error. A lapsed TackQuote
 > account still answers that, so it reads connected.
 

@@ -49,6 +49,7 @@ class ApiClient
     public const CONNECTION_KEY_REJECTED = 'key_rejected';
     public const CONNECTION_KEY_UNCHECKED = 'key_unchecked';
     public const CONNECTION_FAILED = 'failed';
+    public const CONNECTION_WRONG_ADDRESS = 'wrong_address';
 
     /**
      * Perform an authenticated request against the Tack API.
@@ -76,11 +77,14 @@ class ApiClient
      *
      * `error` is set when no HTTP answer arrived at all (DNS, refused, TLS, timeout).
      *
+     * `$base` replaces the configured API URL (only the origin's own /health probe in
+     * checkConnection() uses it); null = the API URL.
+     *
      * @return array{error: string|null, status: int, body: string}
      */
-    protected function transport(string $method, string $path, ?array $body = null): array
+    protected function transport(string $method, string $path, ?array $body = null, ?string $base = null): array
     {
-        $url = $this->baseUrl . $path;
+        $url = ($base ?? $this->baseUrl) . $path;
 
         $headers = [
             'Authorization: Bearer ' . $this->apiKey,
@@ -122,9 +126,9 @@ class ApiClient
      *
      * @return array{status: int, data: array, error: string|null}
      */
-    protected function exchange(string $method, string $path, ?array $body = null): array
+    protected function exchange(string $method, string $path, ?array $body = null, ?string $base = null): array
     {
-        $raw = $this->transport($method, $path, $body);
+        $raw = $this->transport($method, $path, $body, $base);
         if ($raw['error'] !== null) {
             return ['status' => 0, 'data' => [], 'error' => $raw['error']];
         }
@@ -158,8 +162,15 @@ class ApiClient
      * 200 without a key, so a wrong or revoked key reported "Connected".
      *
      * `/health` is tried only when the ping failure says nothing about the key: no HTTP
-     * answer (network error, timeout), 404 (a TackQuote API older than the route) or
-     * 5xx. If /health then answers 2xx the result is CONNECTION_KEY_UNCHECKED, never OK.
+     * answer (network error, timeout), a 404 or a 5xx. A /health answer counts only when
+     * it is TackQuote's own body (isTackQuoteHealth()); any other 2xx is CONNECTION_FAILED.
+     * - No answer or 5xx, then TackQuote's /health: CONNECTION_KEY_UNCHECKED, never OK.
+     * - 404: every current TackQuote API has the ping route, so a 404 means the request
+     *   did not reach it. When TackQuote's /health answers at the origin (or at the API
+     *   URL when that does not end in /v1) the API URL setting is wrong, usually missing
+     *   `/v1`: CONNECTION_WRONG_ADDRESS. Only when the API URL already ends in /v1 and
+     *   TackQuote's /health answers there is it a TackQuote API without the ping route:
+     *   CONNECTION_KEY_UNCHECKED.
      * Every other status (400, 403, 429, ...) is CONNECTION_FAILED with TackQuote's message.
      *
      * @return array{result: string, message: string} `message` is the ping's own error
@@ -196,14 +207,57 @@ class ApiClient
             return ['result' => self::CONNECTION_KEY_REJECTED, 'message' => (string) $ping['error']];
         }
 
-        if ($status === 0 || $status === 404 || $status >= 500) {
-            $health = $this->exchange('GET', '/health');
-            if ($health['error'] === null) {
+        if ($status === 404) {
+            $atApiUrl = $this->isTackQuoteHealth($this->exchange('GET', '/health'));
+            if ($atApiUrl && preg_match('~/v1$~i', $this->baseUrl)) {
+                return ['result' => self::CONNECTION_KEY_UNCHECKED, 'message' => (string) $ping['error']];
+            }
+            if ($atApiUrl) {
+                return ['result' => self::CONNECTION_WRONG_ADDRESS, 'message' => (string) $ping['error']];
+            }
+            $origin = $this->originOf($this->baseUrl);
+            if ($origin !== '' && $origin !== $this->baseUrl
+                && $this->isTackQuoteHealth($this->exchange('GET', '/health', null, $origin))) {
+                return ['result' => self::CONNECTION_WRONG_ADDRESS, 'message' => (string) $ping['error']];
+            }
+        } elseif ($status === 0 || $status >= 500) {
+            if ($this->isTackQuoteHealth($this->exchange('GET', '/health'))) {
                 return ['result' => self::CONNECTION_KEY_UNCHECKED, 'message' => (string) $ping['error']];
             }
         }
 
         return ['result' => self::CONNECTION_FAILED, 'message' => (string) $ping['error']];
+    }
+
+    /**
+     * True only for TackQuote's own `GET /health` answer: a 2xx whose body is
+     * `{"status": "ok", "database": "connected", "uptime": <seconds>, ...}` (the health
+     * handler in tack apps/api/src/main.ts, served at both /health and /v1/health). Any
+     * other 2xx (a shop's web page, another service's health check) proves nothing about
+     * TackQuote.
+     *
+     * @param array{status: int, data: array, error: string|null} $exchange
+     */
+    protected function isTackQuoteHealth(array $exchange): bool
+    {
+        $d = $exchange['data'];
+
+        return $exchange['error'] === null
+            && isset($d['status'], $d['database'], $d['uptime'])
+            && $d['status'] === 'ok'
+            && $d['database'] === 'connected'
+            && (is_int($d['uptime']) || is_float($d['uptime']));
+    }
+
+    /** `scheme://host[:port]` of a URL, or '' when it has no scheme or host. */
+    protected function originOf(string $url): string
+    {
+        $parts = parse_url($url);
+        if (!is_array($parts) || empty($parts['scheme']) || empty($parts['host'])) {
+            return '';
+        }
+
+        return $parts['scheme'] . '://' . $parts['host'] . (isset($parts['port']) ? ':' . $parts['port'] : '');
     }
 
     /**
@@ -223,6 +277,8 @@ class ApiClient
                 return 'TackQuote rejected this API key. Check it in TackQuote under Settings > Developer > API keys.';
             case self::CONNECTION_KEY_UNCHECKED:
                 return 'TackQuote is reachable, but the API key could not be checked.';
+            case self::CONNECTION_WRONG_ADDRESS:
+                return 'TackQuote answered, but not at the API address: check the TackQuote API URL setting (it should end in /v1).';
             default:
                 return $check['message'];
         }

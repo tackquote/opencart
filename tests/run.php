@@ -343,7 +343,10 @@ const FIX_404 = '{"statusCode":404,"code":"NOTFOUND","message":"Cannot GET /v1/i
 const FIX_500 = '{"statusCode":500,"message":"Internal server error"}';
 const FIX_503 = '<html><body><h1>503 Service Unavailable</h1></body></html>';
 const FIX_HTML_200 = '<!doctype html><html><head><title>My shop</title></head><body>Welcome</body></html>';
-const FIX_HEALTH = '{"status":"ok","database":"connected","redis":"writable"}';
+const FIX_HEALTH = '{"status":"ok","database":"connected","redis":"writable","version":"unknown","uptime":51234.5,"timestamp":"2026-11-27T00:00:00.000Z"}';
+/** Shapes that are NOT TackQuote's /health and must never count as reachable. */
+const FIX_HEALTH_OTHER = '{"status":"ok"}';
+const FIX_HEALTH_404 = '{"statusCode":404,"code":"NOTFOUND","message":"Cannot GET /api/v1/health","path":"/api/v1/health"}';
 
 /**
  * The ApiClient with only its raw cURL call scripted, per path. JSON decoding, message
@@ -357,24 +360,36 @@ class ScriptedApiClient extends \Opencart\System\Library\Extension\Tack\ApiClien
     /** @var array<int, string> */
     public array $paths = [];
 
-    protected function transport(string $method, string $path, ?array $body = null): array
+    protected function transport(string $method, string $path, ?array $body = null, ?string $base = null): array
     {
-        $this->paths[] = $method . ' ' . $path;
+        // The configured API URL is recorded as the bare path, any other base in full.
+        $key = ($base ?? '') . $path;
+        $this->paths[] = $method . ' ' . $key;
 
-        return $this->answers[$path];
+        // Anything not scripted gets no HTTP answer at all, as an unreachable host would.
+        return $this->answers[$key] ?? scriptedRaw(null);
     }
 }
 
-/** @param array{0: int, 1: string}|null $ping null = no HTTP answer at all */
-function scripted(?array $ping, ?array $health = [200, FIX_HEALTH]): ScriptedApiClient
+/** @param array{0: int, 1: string}|null $a null = no HTTP answer at all */
+function scriptedRaw(?array $a): array
 {
-    $raw = function (?array $a): array {
-        return $a === null
-            ? ['error' => 'Connection error: Operation timed out after 20001 milliseconds', 'status' => 0, 'body' => '']
-            : ['error' => null, 'status' => $a[0], 'body' => $a[1]];
-    };
-    $client = new ScriptedApiClient('https://api.tackquote.com/v1', 'sk_test');
-    $client->answers = ['/integrations/opencart/ping' => $raw($ping), '/health' => $raw($health)];
+    return $a === null
+        ? ['error' => 'Connection error: Operation timed out after 20001 milliseconds', 'status' => 0, 'body' => '']
+        : ['error' => null, 'status' => $a[0], 'body' => $a[1]];
+}
+
+/**
+ * @param array{0: int, 1: string}|null $ping null = no HTTP answer at all
+ * @param array<string, array{0: int, 1: string}|null> $extra more answers, keyed by full URL
+ */
+function scripted(?array $ping, ?array $health = [200, FIX_HEALTH], string $baseUrl = 'https://api.tackquote.com/v1', array $extra = []): ScriptedApiClient
+{
+    $client = new ScriptedApiClient($baseUrl, 'sk_test');
+    $client->answers = ['/integrations/opencart/ping' => scriptedRaw($ping), '/health' => scriptedRaw($health)];
+    foreach ($extra as $key => $answer) {
+        $client->answers[$key] = scriptedRaw($answer);
+    }
 
     return $client;
 }
@@ -416,7 +431,7 @@ foreach (['plan limit' => FIX_403_PLAN, 'tenant not found' => FIX_403_TENANT] as
     });
 }
 
-foreach (['a network error' => null, 'a 404 (older API)' => [404, FIX_404], 'a 500' => [500, FIX_500], 'a 503 page' => [503, FIX_503]] as $label => $ping) {
+foreach (['a network error' => null, 'a 404 at a /v1 API URL' => [404, FIX_404], 'a 500' => [500, FIX_500], 'a 503 page' => [503, FIX_503]] as $label => $ping) {
     check("ping $label + /health 200 -> reachable, key NOT checked (never connected)", function () use ($ping) {
         $client = scripted($ping);
         assertSame(TackApiClient::CONNECTION_KEY_UNCHECKED, $client->checkConnection()['result'], 'the key was never checked');
@@ -430,6 +445,40 @@ foreach (['a network error' => null, 'a 404 (older API)' => [404, FIX_404], 'a 5
         assertTrue($check['message'] !== '', 'the merchant needs the reason');
     });
 }
+
+foreach (['a network error' => null, 'a 500' => [500, FIX_500], 'a 404' => [404, FIX_404]] as $label => $ping) {
+    foreach (['{"status":"ok"}' => [200, FIX_HEALTH_OTHER], 'a web page' => [200, FIX_HTML_200]] as $hl => $health) {
+        check("ping $label + /health 200 that is $hl (not TackQuote's) -> failed, never reachable", function () use ($ping, $health) {
+            assertSame(TackApiClient::CONNECTION_FAILED, scripted($ping, $health)->checkConnection()['result'], 'not TackQuote\'s /health');
+        });
+    }
+}
+
+const WRONG_ADDRESS_TEXT = 'TackQuote answered, but not at the API address: check the TackQuote API URL setting (it should end in /v1).';
+
+check('API URL without /v1: ping 404 + TackQuote /health -> wrong address, the origin is not probed twice', function () {
+    $client = scripted([404, FIX_404], [200, FIX_HEALTH], 'https://api.tackquote.com');
+    assertSame(TackApiClient::CONNECTION_WRONG_ADDRESS, $client->checkConnection()['result'], 'the URL setting is wrong');
+    assertSame(WITH_HEALTH, $client->paths, 'one /health probe');
+    assertSame(WRONG_ADDRESS_TEXT, scripted([404, FIX_404], [200, FIX_HEALTH], 'https://api.tackquote.com')->testConnection(), 'legacy testConnection() text');
+});
+
+check('wrong path ending in /v1: ping 404, /health 404, root /health TackQuote -> wrong address', function () {
+    $root = 'https://api.tackquote.com/health';
+    $client = scripted([404, FIX_404], [404, FIX_HEALTH_404], 'https://api.tackquote.com/api/v1', [$root => [200, FIX_HEALTH]]);
+    assertSame(TackApiClient::CONNECTION_WRONG_ADDRESS, $client->checkConnection()['result'], 'the root /health is TackQuote');
+    assertSame(['GET /integrations/opencart/ping', 'GET /health', 'GET ' . $root], $client->paths, 'probes the origin');
+    $page = scripted([404, FIX_404], [404, FIX_HEALTH_404], 'https://api.tackquote.com/api/v1', [$root => [200, FIX_HTML_200]]);
+    assertSame(TackApiClient::CONNECTION_FAILED, $page->checkConnection()['result'], 'a web page at the root is not TackQuote');
+    $none = scripted([404, FIX_404], [404, FIX_HEALTH_404], 'https://api.tackquote.com/api/v1', [$root => null]);
+    assertSame(TackApiClient::CONNECTION_FAILED, $none->checkConnection()['result'], 'nothing at the root');
+});
+
+check('a bare origin answering a web page -> failed, the origin is not probed again', function () {
+    $client = scripted([404, FIX_404], [200, FIX_HTML_200], 'https://shop.example');
+    assertSame(TackApiClient::CONNECTION_FAILED, $client->checkConnection()['result'], 'not TackQuote');
+    assertSame(WITH_HEALTH, $client->paths, 'origin equals the API URL');
+});
 
 check('ping 429 -> failed with TackQuote\'s message, no fallback to /health', function () {
     $client = scripted([429, '{"statusCode":429,"message":"ThrottlerException: Too Many Requests"}']);
@@ -458,11 +507,11 @@ class ProbeAdmin extends Tackquotes
     }
 }
 
-function adminTest(?array $ping, ?array $health = [200, FIX_HEALTH]): array
+function adminTest(?array $ping, ?array $health = [200, FIX_HEALTH], string $apiUrl = 'https://api.tackquote.com/v1'): array
 {
-    ProbeAdmin::$client = scripted($ping, $health);
+    ProbeAdmin::$client = scripted($ping, $health, $apiUrl);
     [$controller, $response] = makeController(['modify:' . ROUTE], [], [
-        'module_tackquotes_api_url' => 'https://api.tackquote.com/v1',
+        'module_tackquotes_api_url' => $apiUrl,
         'module_tackquotes_api_key' => 'sk_test',
     ], ProbeAdmin::class);
     $controller->test();
@@ -498,6 +547,12 @@ check('admin: ping 500 + /health 200 -> a warning that never says connected', fu
     assertTrue(!isset($json['success']) && !isset($json['error']), json_encode($json));
     assertTrue(strpos((string) $json['warning'], 'could not be checked') !== false, json_encode($json));
     assertTrue(stripos((string) $json['warning'], 'connected') === false, 'must not say connected');
+});
+
+check('admin: API URL without /v1 (ping 404 + TackQuote /health) -> the "not at the API address" error, not "try again"', function () {
+    $json = adminTest([404, FIX_404], [200, FIX_HEALTH], 'https://api.tackquote.com');
+    assertTrue(!isset($json['success']) && !isset($json['warning']), json_encode($json));
+    assertSame(WRONG_ADDRESS_TEXT, $json['error'] ?? null, 'names the API URL setting and /v1');
 });
 
 check('the admin template renders a warning result', function () use ($root) {

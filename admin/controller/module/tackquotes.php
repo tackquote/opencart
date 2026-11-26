@@ -212,6 +212,12 @@ class Tackquotes extends Controller
                 case ApiClient::CONNECTION_KEY_UNCHECKED:
                     $json['warning'] = $this->language->get('text_test_key_unchecked');
                     break;
+                case ApiClient::CONNECTION_WRONG_ADDRESS:
+                    // The ping 404'd and TackQuote's own /health answered at that host:
+                    // the API URL setting is wrong (usually missing /v1), so "try again"
+                    // would never help.
+                    $json['error'] = $this->language->get('error_test_wrong_address');
+                    break;
                 default:
                     $json['error'] = sprintf($this->language->get('error_test_connection'), $check['message']);
             }

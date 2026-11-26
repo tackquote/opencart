@@ -10,8 +10,9 @@ $_['text_edit'] = 'Edit TackQuote';
 $_['text_enabled'] = 'Enabled';
 $_['text_disabled'] = 'Disabled';
 $_['text_test_success'] = 'Connected to TackQuote successfully.';
-// The ping could not run (network error, timeout, an older TackQuote API, a TackQuote
-// error) but /health answered, so the key itself was never checked. Never "Connected".
+// The ping could not run (network error, timeout, a TackQuote error, or a TackQuote API
+// at a /v1 URL without the ping route) but TackQuote's own /health answered, so the key
+// itself was never checked. Never "Connected".
 $_['text_test_key_unchecked'] = 'TackQuote is reachable, but the API key could not be checked. Try again in a few minutes.';
 
 // Entry
@@ -41,6 +42,8 @@ $_['error_permission'] = 'Warning: You do not have permission to modify TackQuot
 $_['error_api_url'] = 'Please enter a valid TackQuote API URL (e.g. https://api.tackquote.com/v1).';
 $_['error_api_key'] = 'Enter or save a TackQuote API key before testing the connection.';
 $_['error_test_connection'] = 'Could not connect to TackQuote: %s';
+// The ping 404'd and TackQuote's own /health answered at that host: the URL is wrong.
+$_['error_test_wrong_address'] = 'TackQuote answered, but not at the API address: check the TackQuote API URL setting (it should end in /v1).';
 $_['error_test_key_rejected'] = 'TackQuote rejected this API key. Check it in TackQuote under Settings > Developer > API keys.';
 // Rendered by the Test connection button when the admin AJAX call itself fails
 // (network error, session expired, endpoint 500) rather than returning JSON. This
